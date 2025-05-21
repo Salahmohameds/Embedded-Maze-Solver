@@ -5,7 +5,7 @@ from PIL import Image
 
 from maze_processor import MazeProcessor
 from path_finder import PathFinder
-from code_generator import ArduinoCodeGenerator, EmbeddedCCodeGenerator
+from code_generator import ArduinoCodeGenerator
 
 st.set_page_config(
     page_title="Maze Solver & Arduino Code Generator",
@@ -153,20 +153,14 @@ def generate_arduino_code_from_points(path_points):
     movement_commands = arduino_generator.generate_movement_commands(structured_path, grid_path)
     arduino_code = arduino_generator.generate_complete_sketch(movement_commands)
     
-    # Generate Embedded C code
-    embedded_c_generator = EmbeddedCCodeGenerator()
-    embedded_c_code = embedded_c_generator.generate_complete_code(movement_commands)
-    
-    return arduino_code, embedded_c_code, movement_commands
+    # Return only Arduino code and movement commands
+    return arduino_code, movement_commands
 
 def main():
     st.title("Maze Solver & Arduino Code Generator")
-    st.markdown("Upload a maze image to generate navigation instructions for an Arduino robot.")
+    st.markdown("Upload a maze image to generate Arduino code for your robot. The app can process both regular maze images and mazes with yellow solution paths.")
     
-    # Add tabs for different modes
-    tab1, tab2 = st.tabs(["Solve Maze", "Extract & Use Yellow Path"])
-    
-    # File uploader (shared between tabs)
+    # File uploader
     uploaded_file = st.file_uploader("Choose a maze image (JPG or PNG)", type=["jpg", "jpeg", "png"])
     
     if uploaded_file is not None:
@@ -174,208 +168,154 @@ def main():
         image = Image.open(uploaded_file)
         img_array = np.array(image)
         
-        # Tab 1: Solve Maze
-        with tab1:
-            col1, col2 = st.columns(2)
-            with col1:
-                st.subheader("Original Maze Image")
-                st.image(img_array, caption="Original Maze", use_container_width=True)
+        # Display original image
+        st.subheader("Original Maze Image")
+        st.image(img_array, caption="Original Maze", use_container_width=True)
+        
+        # Check if image has a yellow path
+        yellow_path, path_points, ordered_points = extract_yellow_path(img_array)
+        has_yellow_path = path_points is not None and len(path_points) > 0
+        
+        # Create tabs based on image content
+        if has_yellow_path:
+            option = st.radio(
+                "Select processing method:",
+                ["Use yellow path from image", "Solve maze from scratch"]
+            )
             
-            # Process the image
-            with st.spinner("Processing maze image..."):
-                maze_processor = MazeProcessor()
+            if option == "Use yellow path from image":
+                # YELLOW PATH PROCESSING
+                with st.spinner("Extracting yellow path and generating code..."):
+                    # Show extracted path
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        st.image(yellow_path, caption="Extracted Yellow Path", use_container_width=True)
+                    
+                    # Create visualization with ordered points
+                    path_overlay = img_array.copy()
+                    for x, y in ordered_points:
+                        cv2.circle(path_overlay, (int(x), int(y)), 3, (0, 255, 0), -1)
+                    
+                    with col2:
+                        st.image(path_overlay, caption="Path Points", use_container_width=True)
+                    
+                    # Generate Arduino code directly from extracted path
+                    arduino_code, movement_commands = generate_arduino_code_from_points(ordered_points)
+                    
+                    # Display Arduino code (main focus)
+                    st.subheader("🤖 Arduino Code for Your Robot")
+                    st.code(arduino_code, language="cpp")
+                    
+                    # Button to download
+                    st.download_button(
+                        label="Download Arduino Code (.ino)",
+                        data=arduino_code,
+                        file_name="maze_solver.ino",
+                        mime="text/plain"
+                    )
+                    
+                    # Display path statistics
+                    total_distance = sum([cmd.get('duration', 0) for cmd in movement_commands if cmd.get('type') == 'F'])
+                    total_turns = sum([1 for cmd in movement_commands if cmd.get('type') in ['L', 'R']])
+                    
+                    st.success(f"✅ Successfully generated Arduino code with {len(ordered_points)} path points, {total_distance}mm travel distance, and {total_turns} turns")
                 
-                # Process image and detect walls/paths
+            else:
+                # STANDARD MAZE SOLVING
+                with st.spinner("Processing maze and finding optimal path..."):
+                    # Process image to detect maze structure
+                    maze_processor = MazeProcessor()
+                    processed_img, binary_maze, start_point, end_point = maze_processor.process_image(img_array)
+                    
+                    if start_point is None or end_point is None:
+                        st.warning("Could not detect start and end points clearly. Using default positions.")
+                        height, width = binary_maze.shape
+                        start_point = (width - 30, 30)
+                        end_point = (30, height - 30)
+                    
+                    # Solve the maze using A*
+                    path_finder = PathFinder()
+                    path, grid_path = path_finder.find_path(binary_maze, start_point, end_point)
+                    
+                    if path is None or len(path) == 0:
+                        st.error("Could not find a valid path through the maze. Try again with a clearer image.")
+                        return
+                    
+                    # Draw path on image
+                    path_img = maze_processor.draw_path(img_array.copy(), path)
+                    st.image(path_img, caption="Computed Path Solution", use_container_width=True)
+                    
+                    # Generate Arduino code
+                    arduino_generator = ArduinoCodeGenerator()
+                    movement_commands = arduino_generator.generate_movement_commands(path, grid_path)
+                    arduino_code = arduino_generator.generate_complete_sketch(movement_commands)
+                    
+                    # Display Arduino code (main focus)
+                    st.subheader("🤖 Arduino Code for Your Robot")
+                    st.code(arduino_code, language="cpp")
+                    
+                    # Button to download
+                    st.download_button(
+                        label="Download Arduino Code (.ino)",
+                        data=arduino_code,
+                        file_name="maze_solver.ino",
+                        mime="text/plain"
+                    )
+                    
+                    # Display path statistics
+                    total_distance = sum([cmd.get('duration', 0) for cmd in movement_commands if cmd.get('type') == 'F'])
+                    total_turns = sum([1 for cmd in movement_commands if cmd.get('type') in ['L', 'R']])
+                    
+                    st.success(f"✅ Successfully generated Arduino code with {len(path)} path points, {total_distance}mm travel distance, and {total_turns} turns")
+        
+        else:
+            # STANDARD MAZE SOLVING (No yellow path detected)
+            with st.spinner("Processing maze and finding optimal path..."):
+                # Process image to detect maze structure
+                maze_processor = MazeProcessor()
                 processed_img, binary_maze, start_point, end_point = maze_processor.process_image(img_array)
                 
                 if start_point is None or end_point is None:
                     st.warning("Could not detect start and end points clearly. Using default positions.")
-                    # Use fallback positions (top-right and bottom-left)
                     height, width = binary_maze.shape
                     start_point = (width - 30, 30)
                     end_point = (30, height - 30)
                 
-                # For all mazes, use A* pathfinding to solve the maze
-                st.info("Solving maze using A* pathfinding algorithm...")
-                
-                # Find path
+                # Solve the maze using A*
                 path_finder = PathFinder()
                 path, grid_path = path_finder.find_path(binary_maze, start_point, end_point)
                 
                 if path is None or len(path) == 0:
-                    st.error("Could not find a valid path through the maze.")
+                    st.error("Could not find a valid path through the maze. Try again with a clearer image.")
                     return
                 
-                # Draw the path on the image
+                # Draw path on image
                 path_img = maze_processor.draw_path(img_array.copy(), path)
-                
-                with col2:
-                    st.subheader("Processed Maze with Path")
-                    st.image(path_img, caption="Path Solution", use_container_width=True)
-                
-                # Generate movement commands
-                arduino_generator = ArduinoCodeGenerator()
-                movement_commands = arduino_generator.generate_movement_commands(path, grid_path)
+                st.image(path_img, caption="Computed Path Solution", use_container_width=True)
                 
                 # Generate Arduino code
+                arduino_generator = ArduinoCodeGenerator()
+                movement_commands = arduino_generator.generate_movement_commands(path, grid_path)
                 arduino_code = arduino_generator.generate_complete_sketch(movement_commands)
                 
-                # Generate Embedded C code
-                embedded_c_generator = EmbeddedCCodeGenerator()
-                embedded_c_code = embedded_c_generator.generate_complete_code(movement_commands)
-                
-                # Display code
-                st.subheader("Generated Arduino Code")
+                # Display Arduino code (main focus)
+                st.subheader("🤖 Arduino Code for Your Robot")
                 st.code(arduino_code, language="cpp")
                 
-                # Button to copy code
+                # Button to download
                 st.download_button(
-                    label="Download Arduino Code",
+                    label="Download Arduino Code (.ino)",
                     data=arduino_code,
                     file_name="maze_solver.ino",
                     mime="text/plain"
                 )
                 
-                st.subheader("Generated Embedded C Code")
-                st.code(embedded_c_code, language="c")
-                
-                # Button to copy code
-                st.download_button(
-                    label="Download Embedded C Code",
-                    data=embedded_c_code,
-                    file_name="maze_solver.c",
-                    mime="text/plain"
-                )
-                
-                # Display validation info
-                st.subheader("Path Validation")
+                # Display path statistics
                 total_distance = sum([cmd.get('duration', 0) for cmd in movement_commands if cmd.get('type') == 'F'])
                 total_turns = sum([1 for cmd in movement_commands if cmd.get('type') in ['L', 'R']])
                 
-                st.info(f"Path Statistics: {len(path)} total steps, {total_distance}mm distance, {total_turns} turns")
-        
-        # Tab 2: Extract Yellow Path and use its points directly
-        with tab2:
-            st.subheader("Yellow Path Extraction & Code Generation")
-            
-            # Process to extract yellow path
-            yellow_path, path_points, ordered_points = extract_yellow_path(img_array)
-            
-            # Display results
-            col1, col2 = st.columns(2)
-            with col1:
-                st.image(img_array, caption="Original Image", use_container_width=True)
-            
-            with col2:
-                st.image(yellow_path, caption="Extracted Yellow Path", use_container_width=True)
-            
-            # Show path points
-            if path_points is not None and len(path_points) > 0:
-                # Create a new image with the path highlighted
-                path_overlay = img_array.copy()
-                
-                # Draw all raw points in light blue
-                for point in path_points:
-                    x, y = point[0]
-                    cv2.circle(path_overlay, (x, y), 1, (200, 200, 0), -1)
-                
-                # Draw ordered points in green (thicker)
-                for x, y in ordered_points:
-                    cv2.circle(path_overlay, (int(x), int(y)), 3, (0, 255, 0), -1)
-                
-                st.subheader("Path Points Visualization")
-                st.image(path_overlay, caption="Green dots show extracted path points", use_container_width=True)
-                
-                # Generate Arduino code directly from extracted path
-                st.subheader("Generate Code From Extracted Yellow Path")
-                
-                if st.button("Generate Arduino Code from Yellow Path"):
-                    with st.spinner("Generating Arduino code from extracted path..."):
-                        arduino_code, embedded_c_code, movement_commands = generate_arduino_code_from_points(ordered_points)
-                        
-                        # Display Arduino code
-                        st.subheader("Arduino Code (from Yellow Path)")
-                        st.code(arduino_code, language="cpp")
-                        
-                        # Button to download
-                        st.download_button(
-                            label="Download Arduino Code",
-                            data=arduino_code,
-                            file_name="yellow_path_arduino.ino",
-                            mime="text/plain"
-                        )
-                        
-                        # Display validation info
-                        total_distance = sum([cmd.get('duration', 0) for cmd in movement_commands if cmd.get('type') == 'F'])
-                        total_turns = sum([1 for cmd in movement_commands if cmd.get('type') in ['L', 'R']])
-                        
-                        st.success(f"Path Statistics: {len(ordered_points)} points, {total_distance}mm distance, {total_turns} turns")
-                
-                # Display path point coordinates
-                with st.expander("View Path Point Coordinates"):
-                    st.write("First 10 ordered path points:")
-                    for i, (x, y) in enumerate(ordered_points[:10]):
-                        st.write(f"Point {i+1}: ({x}, {y})")
-                    
-                    if len(ordered_points) > 10:
-                        st.write(f"... and {len(ordered_points)-10} more points")
-                
-                # Provide download button for the Python extraction code
-                with st.expander("View and Download Python Code"):
-                    python_code = f"""
-import cv2
-import numpy as np
-
-# Load the maze image
-image = cv2.imread("solved-maze.jpg")
-
-# Convert to HSV color space
-hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-
-# Define yellow color range
-lower_yellow = np.array([20, 100, 100])
-upper_yellow = np.array([40, 255, 255])
-
-# Create mask for yellow path
-mask = cv2.inRange(hsv, lower_yellow, upper_yellow)
-
-# Clean up mask
-kernel = np.ones((3, 3), np.uint8)
-mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
-mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-
-# Extract path points
-path_points = cv2.findNonZero(mask)
-
-# Visualize path
-path_overlay = image.copy()
-for point in path_points:
-    x, y = point[0]
-    cv2.circle(path_overlay, (x, y), 3, (0, 255, 0), -1)
-
-# Display results
-cv2.imshow("Original Image", image)
-cv2.imshow("Yellow Path Mask", mask)
-cv2.imshow("Path Visualization", path_overlay)
-cv2.waitKey(0)
-cv2.destroyAllWindows()
-"""
-                    st.code(python_code, language="python")
-                    
-                    st.download_button(
-                        label="Download Path Extraction Code",
-                        data=python_code,
-                        file_name="extract_yellow_path.py",
-                        mime="text/plain"
-                    )
-                
-                # Display total number of points
-                st.success(f"Successfully extracted {len(path_points)} points from the yellow path!")
-            else:
-                st.error("No yellow path detected in the image. Please upload an image with a yellow solution path.")
-                
-                # Show example image
-                st.info("Example: The app expects a maze image with a yellow path like the solved-maze.jpg in attached_assets.")
+                st.success(f"✅ Successfully generated Arduino code with {len(path)} path points, {total_distance}mm travel distance, and {total_turns} turns")
 
 if __name__ == "__main__":
     main()
