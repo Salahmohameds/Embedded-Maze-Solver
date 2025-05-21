@@ -1,0 +1,113 @@
+Create a Python application with these specific features:
+
+Image Processing & Path Generation:
+
+Accept maze image uploads (JPG/PNG)
+
+Process image using OpenCV to:
+
+Convert to grayscale
+
+Apply thresholding
+
+Detect walls and paths
+
+Determine start/end points
+
+Generate optimal path using A* algorithm
+
+Output Arduino instructions in this exact format:
+
+cpp
+// AUTO-GENERATED MAZE INSTRUCTIONS
+void executeMazePath() {
+  // Movement commands (F=forward, L/R=turn degrees, D=delay ms)
+  forward(150);  // F150
+  turnRight(90); // R90
+  delay(500);    // D500
+  forward(75);   // F75
+  turnLeft(90);  // L90
+  // ... more commands
+}
+Arduino Code Generator:
+
+Create complete Arduino sketch with:
+
+Bluetooth command parsing
+
+Motor control functions
+
+The generated maze path function
+
+Output in a copy-pasteable code block
+
+Minimal GUI Requirements:
+
+Single window with:
+
+Image upload button
+
+Processing status
+
+Arduino code display (editable text area)
+
+"Send to Arduino" button (simulated)
+
+Technical Specifications:
+
+Use only these essential libraries:
+
+python
+import cv2
+import numpy as np
+from pathfinding.core.grid import Grid
+from pathfinding.finder.a_star import AStarFinder
+import PySimpleGUI as sg
+Remove all unused classes/imports
+
+Optimize for 8-bit microcontroller constraints
+
+Output Samples:
+
+Example input: 400x400px maze image
+
+Example Arduino output:
+
+cpp
+// MOTOR CONTROL FUNCTIONS
+void forward(int duration) {
+  digitalWrite(M1A, HIGH);
+  digitalWrite(M1B, LOW);
+  digitalWrite(M2A, HIGH);
+  digitalWrite(M2B, LOW);
+  delay(duration);
+}
+
+// GENERATED PATH
+void runMaze() {
+  forward(200); delay(100);
+  turnLeft(90); delay(300);
+  forward(150); delay(100);
+  turnRight(90); delay(300);
+}
+Validation:
+
+Visual path overlay on input image
+
+Command duration calculator
+
+Syntax-validated Arduino output
+
+Exclude all Bluetooth pairing/GUI code - focus solely on the image-to-instructions pipeline with clean Arduino code generation."
+if you can give the output also in embedded c 
+Key Differences:
+
+Removed all Bluetooth/GUI complexity
+
+Added specific Arduino code formatting
+
+Included pathfinding algorithm details
+
+Added hardware-aware optimizations
+
+Focused on copy-paste ready output
