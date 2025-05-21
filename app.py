@@ -1,9 +1,6 @@
 import streamlit as st
 import cv2
 import numpy as np
-import matplotlib.pyplot as plt
-from io import BytesIO
-import base64
 from PIL import Image
 
 from maze_processor import MazeProcessor
@@ -24,8 +21,9 @@ def extract_yellow_path(image):
         image: Input image as numpy array
         
     Returns:
-        path_img: Image with only the yellow path
+        yellow_path: Image with only the yellow path
         path_points: List of (x, y) coordinates along the path
+        ordered_points: Ordered list of points from start to end
     """
     # Convert to HSV color space
     hsv = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
@@ -45,24 +43,128 @@ def extract_yellow_path(image):
     # Extract path points
     path_points = cv2.findNonZero(mask)
     
-    # Create path image
-    path_img = np.zeros_like(image)
-    if path_points is not None:
-        for point in path_points:
-            x, y = point[0]
-            cv2.circle(path_img, (x, y), 2, (0, 255, 0), -1)
-    
     # Extract only the yellow path from original image
     yellow_path = cv2.bitwise_and(image, image, mask=mask)
     
-    return yellow_path, path_points
+    # Try to order the points from start to end
+    ordered_points = []
+    if path_points is not None and len(path_points) > 0:
+        # Find start and end points (red and green areas)
+        hsv = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
+        
+        # Red range (for START)
+        lower_red1 = np.array([0, 100, 100])
+        upper_red1 = np.array([10, 255, 255])
+        lower_red2 = np.array([160, 100, 100])
+        upper_red2 = np.array([180, 255, 255])
+        
+        # Green range (for END)
+        lower_green = np.array([40, 100, 100])
+        upper_green = np.array([80, 255, 255])
+        
+        # Create masks for start/end
+        mask_red1 = cv2.inRange(hsv, lower_red1, upper_red1)
+        mask_red2 = cv2.inRange(hsv, lower_red2, upper_red2)
+        mask_red = cv2.bitwise_or(mask_red1, mask_red2)
+        mask_green = cv2.inRange(hsv, lower_green, upper_green)
+        
+        # Find center of start/end areas
+        start_point = None
+        end_point = None
+        
+        # Find the closest yellow point to start/end
+        if np.sum(mask_red) > 0:
+            red_points = np.where(mask_red > 0)
+            start_y = int(np.mean(red_points[0]))
+            start_x = int(np.mean(red_points[1]))
+            start_point = (start_x, start_y)
+        
+        if np.sum(mask_green) > 0:
+            green_points = np.where(mask_green > 0)
+            end_y = int(np.mean(green_points[0]))
+            end_x = int(np.mean(green_points[1]))
+            end_point = (end_x, end_y)
+        
+        # If couldn't find colors, use image corners
+        if start_point is None:
+            start_point = (image.shape[1]-50, 50)  # Top-right
+        
+        if end_point is None:
+            end_point = (50, image.shape[0]-50)    # Bottom-left
+        
+        # Find points in the yellow path closest to start and end
+        min_start_dist = float('inf')
+        min_end_dist = float('inf')
+        start_index = 0
+        end_index = 0
+        
+        for i, point in enumerate(path_points):
+            x, y = point[0]
+            
+            # Distance to start
+            start_dist = np.sqrt((x - start_point[0])**2 + (y - start_point[1])**2)
+            if start_dist < min_start_dist:
+                min_start_dist = start_dist
+                start_index = i
+            
+            # Distance to end
+            end_dist = np.sqrt((x - end_point[0])**2 + (y - end_point[1])**2)
+            if end_dist < min_end_dist:
+                min_end_dist = end_dist
+                end_index = i
+        
+        # Sample points along path for simplified representation
+        # Note: This is a simplistic approach. A more sophisticated algorithm
+        # would trace the path from start to end more accurately.
+        if len(path_points) > 50:
+            # Determine how many points to sample
+            sample_rate = max(1, len(path_points) // 50)
+            
+            # Extract points, starting near the start point
+            point_array = np.array([p[0] for p in path_points])
+            
+            # Get a simplified path by sampling
+            ordered_points = point_array[::sample_rate].tolist()
+            
+            # Ensure start and end points are included
+            if start_index < end_index:
+                ordered_points = [path_points[start_index][0].tolist()] + ordered_points + [path_points[end_index][0].tolist()]
+            else:
+                ordered_points = [path_points[end_index][0].tolist()] + ordered_points + [path_points[start_index][0].tolist()]
+        else:
+            # If few points, use all of them
+            ordered_points = [p[0].tolist() for p in path_points]
+    
+    return yellow_path, path_points, ordered_points
+
+def generate_arduino_code_from_points(path_points):
+    """Generate Arduino code from extracted path points"""
+    
+    # Convert path points to structured path format
+    structured_path = []
+    for i, point in enumerate(path_points):
+        structured_path.append((point[0], point[1]))
+    
+    # Create artificial grid_path for compatibility
+    grid_path = [tuple(p) for p in structured_path]
+    
+    # Use existing ArduinoCodeGenerator to generate code
+    arduino_generator = ArduinoCodeGenerator()
+    movement_commands = arduino_generator.generate_movement_commands(structured_path, grid_path)
+    arduino_code = arduino_generator.generate_complete_sketch(movement_commands)
+    
+    # Generate Embedded C code
+    embedded_c_generator = EmbeddedCCodeGenerator()
+    embedded_c_code = embedded_c_generator.generate_complete_code(movement_commands)
+    
+    return arduino_code, embedded_c_code, movement_commands
 
 def main():
     st.title("Maze Solver & Arduino Code Generator")
     st.markdown("Upload a maze image to generate navigation instructions for an Arduino robot.")
     
     # Add tabs for different modes
-    tab1, tab2 = st.tabs(["Solve Maze", "Extract Yellow Path"])
+    tab1, tab2 = st.tabs(["Solve Maze", "Extract & Use Yellow Path"])
     
     # File uploader (shared between tabs)
     uploaded_file = st.file_uploader("Choose a maze image (JPG or PNG)", type=["jpg", "jpeg", "png"])
@@ -152,12 +254,12 @@ def main():
                 
                 st.info(f"Path Statistics: {len(path)} total steps, {total_distance}mm distance, {total_turns} turns")
         
-        # Tab 2: Extract Yellow Path
+        # Tab 2: Extract Yellow Path and use its points directly
         with tab2:
-            st.subheader("Yellow Path Extraction")
+            st.subheader("Yellow Path Extraction & Code Generation")
             
             # Process to extract yellow path
-            yellow_path, path_points = extract_yellow_path(img_array)
+            yellow_path, path_points, ordered_points = extract_yellow_path(img_array)
             
             # Display results
             col1, col2 = st.columns(2)
@@ -169,27 +271,58 @@ def main():
             
             # Show path points
             if path_points is not None and len(path_points) > 0:
-                # Sample points for display (too many would be overwhelming)
-                if len(path_points) > 100:
-                    sample_rate = len(path_points) // 100
-                    sampled_points = path_points[::sample_rate]
-                else:
-                    sampled_points = path_points
-                
                 # Create a new image with the path highlighted
                 path_overlay = img_array.copy()
-                for point in sampled_points:
+                
+                # Draw all raw points in light blue
+                for point in path_points:
                     x, y = point[0]
-                    cv2.circle(path_overlay, (x, y), 3, (0, 255, 0), -1)
+                    cv2.circle(path_overlay, (x, y), 1, (200, 200, 0), -1)
+                
+                # Draw ordered points in green (thicker)
+                for x, y in ordered_points:
+                    cv2.circle(path_overlay, (int(x), int(y)), 3, (0, 255, 0), -1)
                 
                 st.subheader("Path Points Visualization")
                 st.image(path_overlay, caption="Green dots show extracted path points", use_container_width=True)
                 
-                # Convert to Python code
-                path_points_list = [(p[0][0], p[0][1]) for p in path_points[:20]]  # Show first 20 for example
+                # Generate Arduino code directly from extracted path
+                st.subheader("Generate Code From Extracted Yellow Path")
                 
-                st.subheader("Python Code for Path Extraction")
-                python_code = f"""
+                if st.button("Generate Arduino Code from Yellow Path"):
+                    with st.spinner("Generating Arduino code from extracted path..."):
+                        arduino_code, embedded_c_code, movement_commands = generate_arduino_code_from_points(ordered_points)
+                        
+                        # Display Arduino code
+                        st.subheader("Arduino Code (from Yellow Path)")
+                        st.code(arduino_code, language="cpp")
+                        
+                        # Button to download
+                        st.download_button(
+                            label="Download Arduino Code",
+                            data=arduino_code,
+                            file_name="yellow_path_arduino.ino",
+                            mime="text/plain"
+                        )
+                        
+                        # Display validation info
+                        total_distance = sum([cmd.get('duration', 0) for cmd in movement_commands if cmd.get('type') == 'F'])
+                        total_turns = sum([1 for cmd in movement_commands if cmd.get('type') in ['L', 'R']])
+                        
+                        st.success(f"Path Statistics: {len(ordered_points)} points, {total_distance}mm distance, {total_turns} turns")
+                
+                # Display path point coordinates
+                with st.expander("View Path Point Coordinates"):
+                    st.write("First 10 ordered path points:")
+                    for i, (x, y) in enumerate(ordered_points[:10]):
+                        st.write(f"Point {i+1}: ({x}, {y})")
+                    
+                    if len(ordered_points) > 10:
+                        st.write(f"... and {len(ordered_points)-10} more points")
+                
+                # Provide download button for the Python extraction code
+                with st.expander("View and Download Python Code"):
+                    python_code = f"""
 import cv2
 import numpy as np
 
@@ -214,9 +347,6 @@ mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
 # Extract path points
 path_points = cv2.findNonZero(mask)
 
-# Sample of extracted points:
-# {path_points_list}
-
 # Visualize path
 path_overlay = image.copy()
 for point in path_points:
@@ -230,20 +360,22 @@ cv2.imshow("Path Visualization", path_overlay)
 cv2.waitKey(0)
 cv2.destroyAllWindows()
 """
-                st.code(python_code, language="python")
-                
-                # Provide download button for the code
-                st.download_button(
-                    label="Download Path Extraction Code",
-                    data=python_code,
-                    file_name="extract_yellow_path.py",
-                    mime="text/plain"
-                )
+                    st.code(python_code, language="python")
+                    
+                    st.download_button(
+                        label="Download Path Extraction Code",
+                        data=python_code,
+                        file_name="extract_yellow_path.py",
+                        mime="text/plain"
+                    )
                 
                 # Display total number of points
                 st.success(f"Successfully extracted {len(path_points)} points from the yellow path!")
             else:
-                st.error("No yellow path detected in the image.")
+                st.error("No yellow path detected in the image. Please upload an image with a yellow solution path.")
+                
+                # Show example image
+                st.info("Example: The app expects a maze image with a yellow path like the solved-maze.jpg in attached_assets.")
 
 if __name__ == "__main__":
     main()
