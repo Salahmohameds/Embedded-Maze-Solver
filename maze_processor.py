@@ -30,8 +30,9 @@ class MazeProcessor:
         # Apply Gaussian blur to reduce noise
         blurred = cv2.GaussianBlur(gray, (5, 5), 0)
         
-        # Apply binary thresholding
-        _, binary = cv2.threshold(blurred, 127, 255, cv2.THRESH_BINARY)
+        # Apply adaptive thresholding for better results with varying lighting
+        binary = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                      cv2.THRESH_BINARY, 11, 2)
         
         # Invert the binary image (walls=0, paths=1)
         binary_inverted = cv2.bitwise_not(binary)
@@ -40,8 +41,12 @@ class MazeProcessor:
         kernel = np.ones((5, 5), np.uint8)
         binary_cleaned = cv2.morphologyEx(binary_inverted, cv2.MORPH_OPEN, kernel)
         
+        # Apply dilation to make paths wider and connect broken paths
+        kernel_dilate = np.ones((3, 3), np.uint8)
+        binary_dilated = cv2.dilate(binary_cleaned, kernel_dilate, iterations=1)
+        
         # Create a binary maze representation (0=wall, 1=path)
-        binary_maze = binary_cleaned.copy()
+        binary_maze = binary_dilated.copy()
         binary_maze = binary_maze // 255  # Normalize to 0 and 1
         
         # Detect start and end points

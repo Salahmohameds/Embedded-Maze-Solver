@@ -31,7 +31,7 @@ def main():
         col1, col2 = st.columns(2)
         with col1:
             st.subheader("Original Maze Image")
-            st.image(img_array, caption="Original Maze", use_column_width=True)
+            st.image(img_array, caption="Original Maze", use_container_width=True)
         
         # Process the image
         with st.spinner("Processing maze image..."):
@@ -57,7 +57,7 @@ def main():
             
             with col2:
                 st.subheader("Processed Maze with Path")
-                st.image(path_img, caption="Path Solution", use_column_width=True)
+                st.image(path_img, caption="Path Solution", use_container_width=True)
             
             # Generate movement commands
             arduino_generator = ArduinoCodeGenerator()
