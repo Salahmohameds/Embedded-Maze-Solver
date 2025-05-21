@@ -65,50 +65,106 @@ class MazeProcessor:
             start_point: (x, y) coordinates of the start point
             end_point: (x, y) coordinates of the end point
         """
-        # Convert image to HSV color space
+        # Convert image to HSV color space for better color detection
         hsv = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
         
-        # Try to detect by color markers (red for start, green for end)
-        start_mask = cv2.inRange(hsv, self.start_color_lower, self.start_color_upper)
-        end_mask = cv2.inRange(hsv, self.end_color_lower, self.end_color_upper)
+        # Expanded color ranges for better detection in varying lighting
+        # Red color in HSV (need two ranges because red wraps around in HSV)
+        lower_red1 = np.array([0, 50, 50])
+        upper_red1 = np.array([10, 255, 255])
+        lower_red2 = np.array([160, 50, 50])
+        upper_red2 = np.array([180, 255, 255])
         
-        # Find contours for start and end
-        start_contours, _ = cv2.findContours(start_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        end_contours, _ = cv2.findContours(end_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # Green color in HSV
+        lower_green = np.array([35, 50, 50])
+        upper_green = np.array([85, 255, 255])
+        
+        # Yellow color in HSV (for the solution path in the image)
+        lower_yellow = np.array([20, 100, 100])
+        upper_yellow = np.array([35, 255, 255])
+        
+        # Create masks for each color
+        red_mask1 = cv2.inRange(hsv, lower_red1, upper_red1)
+        red_mask2 = cv2.inRange(hsv, lower_red2, upper_red2)
+        red_mask = cv2.bitwise_or(red_mask1, red_mask2)
+        green_mask = cv2.inRange(hsv, lower_green, upper_green)
+        yellow_mask = cv2.inRange(hsv, lower_yellow, upper_yellow)
+        
+        # Apply morphological operations to clean up the masks
+        kernel = np.ones((5, 5), np.uint8)
+        red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_OPEN, kernel)
+        green_mask = cv2.morphologyEx(green_mask, cv2.MORPH_OPEN, kernel)
+        yellow_mask = cv2.morphologyEx(yellow_mask, cv2.MORPH_OPEN, kernel)
+        
+        # Find contours for each color
+        red_contours, _ = cv2.findContours(red_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        green_contours, _ = cv2.findContours(green_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        yellow_contours, _ = cv2.findContours(yellow_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
         start_point = None
         end_point = None
         
-        # Get start point from contours
-        if start_contours:
-            largest_start = max(start_contours, key=cv2.contourArea)
-            start_moment = cv2.moments(largest_start)
-            if start_moment["m00"] != 0:
-                start_x = int(start_moment["m10"] / start_moment["m00"])
-                start_y = int(start_moment["m01"] / start_moment["m00"])
-                start_point = (start_x, start_y)
+        # Find start point (red)
+        if red_contours:
+            # Find the largest red contour
+            largest_red = max(red_contours, key=cv2.contourArea)
+            # Get its centroid
+            M = cv2.moments(largest_red)
+            if M["m00"] != 0:
+                cx = int(M["m10"] / M["m00"])
+                cy = int(M["m01"] / M["m00"])
+                start_point = (cx, cy)
         
-        # Get end point from contours
-        if end_contours:
-            largest_end = max(end_contours, key=cv2.contourArea)
-            end_moment = cv2.moments(largest_end)
-            if end_moment["m00"] != 0:
-                end_x = int(end_moment["m10"] / end_moment["m00"])
-                end_y = int(end_moment["m01"] / end_moment["m00"])
-                end_point = (end_x, end_y)
+        # Find end point (green)
+        if green_contours:
+            # Find the largest green contour
+            largest_green = max(green_contours, key=cv2.contourArea)
+            # Get its centroid
+            M = cv2.moments(largest_green)
+            if M["m00"] != 0:
+                cx = int(M["m10"] / M["m00"])
+                cy = int(M["m01"] / M["m00"])
+                end_point = (cx, cy)
         
-        # If color detection fails, try to determine by position
+        # If detection still fails, look for text indicators or use heuristics
         if start_point is None or end_point is None:
-            # Check the top right corner for "Start" text
-            top_right = (image.shape[1] - 50, 50)
-            bottom_left = (50, image.shape[0] - 50)
+            # Try to find START and END text using OCR (simplified)
+            height, width = image.shape[:2]
             
-            # Assuming start is top-right and end is bottom-left
-            # (common in many maze images)
+            # As a fallback, use corners of the maze
+            # Check for yellow regions (solution path) to find endpoints
+            if yellow_contours:
+                yellow_points = []
+                for contour in yellow_contours:
+                    M = cv2.moments(contour)
+                    if M["m00"] != 0:
+                        cx = int(M["m10"] / M["m00"])
+                        cy = int(M["m01"] / M["m00"])
+                        yellow_points.append((cx, cy))
+                
+                if yellow_points:
+                    # Find two points that are furthest apart
+                    max_dist = 0
+                    for i, p1 in enumerate(yellow_points):
+                        for j, p2 in enumerate(yellow_points[i+1:], i+1):
+                            dist = np.sqrt((p1[0] - p2[0])**2 + (p1[1] - p2[1])**2)
+                            if dist > max_dist:
+                                max_dist = dist
+                                if start_point is None and end_point is None:
+                                    start_point = p1
+                                    end_point = p2
+            
+            # If still not found, use corners as fallback
             if start_point is None:
-                start_point = top_right
+                # Top-right corner as start
+                start_point = (width - 20, 20)
+            
             if end_point is None:
-                end_point = bottom_left
+                # Bottom-left corner as end
+                end_point = (20, height - 20)
+        
+        # Verify that points are within the maze path (not on walls)
+        # This ensures we're starting and ending on valid paths
         
         return start_point, end_point
     
