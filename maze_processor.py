@@ -24,47 +24,43 @@ class MazeProcessor:
             start_point: (x, y) coordinates of the start point
             end_point: (x, y) coordinates of the end point
         """
-        # Extract meaningful representation of the physical maze (ignore yellow solution path)
-        # Convert to grayscale
+        # Step 1: Preprocessing - Convert to grayscale
         gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
         
-        # Apply Gaussian blur to reduce noise
+        # Step 2: Apply Gaussian blur to reduce noise
         blurred = cv2.GaussianBlur(gray, (5, 5), 0)
         
-        # Apply adaptive thresholding for better results with varying lighting
-        binary = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-                                      cv2.THRESH_BINARY, 11, 2)
+        # Step 3: Apply Canny edge detection
+        edges = cv2.Canny(blurred, 50, 150)
         
-        # Invert the binary image (walls=0, paths=1)
-        binary_inverted = cv2.bitwise_not(binary)
-        
-        # Remove small noise with morphological operations
-        kernel = np.ones((5, 5), np.uint8)
-        binary_cleaned = cv2.morphologyEx(binary_inverted, cv2.MORPH_OPEN, kernel)
-        
-        # Apply dilation to make paths wider and connect broken paths
+        # Step 4: Dilate the edges to make walls thicker
         kernel_dilate = np.ones((3, 3), np.uint8)
-        binary_dilated = cv2.dilate(binary_cleaned, kernel_dilate, iterations=1)
+        dilated_edges = cv2.dilate(edges, kernel_dilate, iterations=2)
         
-        # Create a binary maze representation (0=wall, 1=path)
-        binary_maze = binary_dilated.copy()
+        # Step 5: Invert to get paths as white and walls as black
+        inverted = cv2.bitwise_not(dilated_edges)
+        
+        # Step 6: Fill in the paths using morphological operations instead of floodFill
+        # Use closing operation to connect nearby white pixels
+        kernel_close = np.ones((7, 7), np.uint8)
+        filled = cv2.morphologyEx(inverted, cv2.MORPH_CLOSE, kernel_close)
+        
+        # Step 7: Apply threshold to get binary image
+        _, binary = cv2.threshold(filled, 128, 255, cv2.THRESH_BINARY)
+        
+        # Step 8: Remove small noise with morphological operations
+        kernel = np.ones((5, 5), np.uint8)
+        cleaned = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
+        cleaned = cv2.morphologyEx(cleaned, cv2.MORPH_CLOSE, kernel)
+        
+        # Step 9: Create binary maze representation (0=wall, 1=path)
+        binary_maze = cleaned.copy()
         binary_maze = binary_maze // 255  # Normalize to 0 and 1
         
-        # First, ignore any yellow coloring when detecting the maze structure
-        # Create a mask to remove the yellow solution path
-        hsv = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
-        lower_yellow = np.array([20, 100, 100])  
-        upper_yellow = np.array([35, 255, 255])
-        yellow_mask = cv2.inRange(hsv, lower_yellow, upper_yellow)
-        
-        # Remove yellow path from binary maze if it affects the wall detection
-        # This ensures we're not treating the yellow path as part of the maze structure
-        yellow_pixels = yellow_mask > 0
-        
-        # Detect start and end points
+        # Step 10: Detect start and end points
         start_point, end_point = self._detect_start_end_points(image)
         
-        # Make sure start and end points are valid (on paths, not walls)
+        # Step 11: Ensure start and end points are on valid paths
         if start_point:
             x, y = start_point
             # Create a small area of 1s around the start point
@@ -84,7 +80,7 @@ class MazeProcessor:
                         binary_maze[ny, nx] = 1
         
         # Return the processed image and binary maze
-        return binary_cleaned, binary_maze, start_point, end_point
+        return cleaned, binary_maze, start_point, end_point
     
     def _detect_start_end_points(self, image):
         """

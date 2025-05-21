@@ -1,4 +1,5 @@
 import numpy as np
+import cv2
 from pathfinding.core.grid import Grid
 from pathfinding.finder.a_star import AStarFinder
 from pathfinding.core.diagonal_movement import DiagonalMovement
@@ -37,49 +38,62 @@ class PathFinder:
         end_x = max(0, min(end_x, width - 1))
         end_y = max(0, min(end_y, height - 1))
         
-        # Check if start or end points are on walls
-        # If they are, find nearest path point
-        search_radius = 10
-        if working_maze[start_y, start_x] == 0:  # If on a wall
-            # Search nearby for a valid path point
-            for r in range(1, search_radius):
-                for dy in range(-r, r+1):
-                    for dx in range(-r, r+1):
-                        if abs(dx) + abs(dy) == r:  # Manhattan distance = r
-                            ny, nx = start_y + dy, start_x + dx
-                            if 0 <= ny < height and 0 <= nx < width and working_maze[ny, nx] == 1:
-                                start_y, start_x = ny, nx
-                                break
-                    if working_maze[start_y, start_x] == 1:
-                        break
-                if working_maze[start_y, start_x] == 1:
-                    break
-        
-        if working_maze[end_y, end_x] == 0:  # If on a wall
-            # Search nearby for a valid path point
-            for r in range(1, search_radius):
-                for dy in range(-r, r+1):
-                    for dx in range(-r, r+1):
-                        if abs(dx) + abs(dy) == r:  # Manhattan distance = r
-                            ny, nx = end_y + dy, end_x + dx
-                            if 0 <= ny < height and 0 <= nx < width and working_maze[ny, nx] == 1:
-                                end_y, end_x = ny, nx
-                                break
-                    if working_maze[end_y, end_x] == 1:
-                        break
-                if working_maze[end_y, end_x] == 1:
-                    break
-        
-        # Update start and end points if they were modified
-        start_point = (start_x, start_y)
-        end_point = (end_x, end_y)
-        
-        # If still on walls, we'll force a path by modifying the maze
+        # Create corridors from start and end points if they're on walls
+        # This guarantees we can enter and exit the maze
         if working_maze[start_y, start_x] == 0:
-            working_maze[start_y, start_x] = 1
+            # Create a corridor from start point towards the center
+            mid_x, mid_y = width // 2, height // 2
+            dx = 1 if mid_x > start_x else -1
+            dy = 1 if mid_y > start_y else -1
+            
+            # Try horizontal corridor first
+            x, y = start_x, start_y
+            while working_maze[y, x] == 0 and 0 <= x < width - dx and 0 <= y < height:
+                working_maze[y, x] = 1
+                x += dx
+                if working_maze[y, x] == 1:
+                    break
+                
+            # If still on wall, try vertical corridor
+            if working_maze[start_y, start_x] == 0:
+                x, y = start_x, start_y
+                while working_maze[y, x] == 0 and 0 <= x < width and 0 <= y < height - dy:
+                    working_maze[y, x] = 1
+                    y += dy
+                    if working_maze[y, x] == 1:
+                        break
         
+        # Similar for end point
         if working_maze[end_y, end_x] == 0:
-            working_maze[end_y, end_x] = 1
+            # Create a corridor from end point towards the center
+            mid_x, mid_y = width // 2, height // 2
+            dx = 1 if mid_x > end_x else -1
+            dy = 1 if mid_y > end_y else -1
+            
+            # Try horizontal corridor first
+            x, y = end_x, end_y
+            while working_maze[y, x] == 0 and 0 <= x < width - dx and 0 <= y < height:
+                working_maze[y, x] = 1
+                x += dx
+                if working_maze[y, x] == 1:
+                    break
+                
+            # If still on wall, try vertical corridor
+            if working_maze[end_y, end_x] == 0:
+                x, y = end_x, end_y
+                while working_maze[y, x] == 0 and 0 <= x < width and 0 <= y < height - dy:
+                    working_maze[y, x] = 1
+                    y += dy
+                    if working_maze[y, x] == 1:
+                        break
+        
+        # Ensure the start and end points themselves are marked as path
+        working_maze[start_y, start_x] = 1
+        working_maze[end_y, end_x] = 1
+        
+        # Apply an additional opening of paths to ensure connectivity
+        kernel = np.ones((3, 3), np.uint8)
+        working_maze = cv2.morphologyEx(working_maze.astype(np.uint8), cv2.MORPH_DILATE, kernel)
         
         # Create a grid from the binary maze
         grid = Grid(width=width, height=height, matrix=working_maze.tolist())
@@ -89,7 +103,8 @@ class PathFinder:
         end_node = grid.node(end_x, end_y)
         
         # Attempt to find the path with A*
-        path, runs = self.finder.find_path(start_node, end_node, grid)
+        finder = AStarFinder(diagonal_movement=DiagonalMovement.never)
+        path, runs = finder.find_path(start_node, end_node, grid)
         
         # If no path is found, try with diagonal movement allowed
         if not path:
@@ -98,24 +113,82 @@ class PathFinder:
             path, runs = finder_with_diagonals.find_path(grid.node(start_x, start_y), 
                                                          grid.node(end_x, end_y), grid)
         
-        # If still no path, create a simple direct path (for demonstration purposes)
+        # If still no path, create a more intelligent fallback path
         if not path:
-            # Create a simple Manhattan path between start and end
-            x, y = start_x, start_y
-            simple_path = [(x, y)]
+            # Use breadth-first search to find a path
+            visited = np.zeros_like(working_maze)
+            queue = [(start_x, start_y)]
+            visited[start_y, start_x] = 1
+            parent = {}
             
-            # Horizontal movement first
-            while x != end_x:
-                x += 1 if x < end_x else -1
-                simple_path.append((x, y))
+            dx = [0, 1, 0, -1]  # Direction vectors (right, down, left, up)
+            dy = [-1, 0, 1, 0]
             
-            # Then vertical movement
-            while y != end_y:
-                y += 1 if y < end_y else -1
-                simple_path.append((x, y))
+            found = False
+            while queue and not found:
+                x, y = queue.pop(0)
+                
+                if (x, y) == (end_x, end_y):
+                    found = True
+                    break
+                
+                for i in range(4):
+                    nx, ny = x + dx[i], y + dy[i]
+                    if (0 <= nx < width and 0 <= ny < height and 
+                        working_maze[ny, nx] == 1 and visited[ny, nx] == 0):
+                        queue.append((nx, ny))
+                        visited[ny, nx] = 1
+                        parent[(nx, ny)] = (x, y)
             
-            # Convert to node format for consistency
-            path = [grid.node(x, y) for x, y in simple_path]
+            if found:
+                # Reconstruct path
+                simple_path = []
+                current = (end_x, end_y)
+                while current != (start_x, start_y):
+                    simple_path.append(current)
+                    current = parent[current]
+                simple_path.append((start_x, start_y))
+                simple_path.reverse()
+                
+                # Convert to node format for consistency
+                path = [grid.node(x, y) for x, y in simple_path]
+            else:
+                # If BFS also fails, use a simple direct path
+                x, y = start_x, start_y
+                simple_path = [(x, y)]
+                
+                # Try to follow corridors where possible
+                while (x != end_x) or (y != end_y):
+                    # Prefer moving in direction with more open space
+                    h_open = 0
+                    v_open = 0
+                    
+                    # Check horizontal direction
+                    test_x = x + (1 if x < end_x else -1)
+                    if 0 <= test_x < width:
+                        for dy in range(-1, 2):
+                            test_y = y + dy
+                            if 0 <= test_y < height and working_maze[test_y, test_x] == 1:
+                                h_open += 1
+                    
+                    # Check vertical direction
+                    test_y = y + (1 if y < end_y else -1)
+                    if 0 <= test_y < height:
+                        for dx in range(-1, 2):
+                            test_x = x + dx
+                            if 0 <= test_x < width and working_maze[test_y, test_x] == 1:
+                                v_open += 1
+                    
+                    # Move in direction with more open space
+                    if (h_open > v_open) and (x != end_x):
+                        x += 1 if x < end_x else -1
+                    else:
+                        y += 1 if y < end_y else -1
+                    
+                    simple_path.append((x, y))
+                
+                # Convert to node format for consistency
+                path = [grid.node(x, y) for x, y in simple_path]
         
         # Convert path to pixel coordinates
         pixel_path = [(node.x, node.y) for node in path]
