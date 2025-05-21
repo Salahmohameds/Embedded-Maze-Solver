@@ -2,6 +2,7 @@ import streamlit as st
 import cv2
 import numpy as np
 from PIL import Image
+import re
 
 from maze_processor import MazeProcessor
 from path_finder import PathFinder
@@ -156,73 +157,182 @@ def generate_arduino_code_from_points(path_points):
     # Return only Arduino code and movement commands
     return arduino_code, movement_commands
 
+def parse_command_string(command_string):
+    """Parse an Arduino command string like $VF285,L90,F392,L90,F285,R90,F245,R90,F570...# into movement commands"""
+    
+    # Extract the commands portion between $V and #
+    pattern = r'\$V(.*?)#'
+    match = re.search(pattern, command_string)
+    
+    if not match:
+        return None
+    
+    commands_str = match.group(1)
+    command_list = commands_str.split(',')
+    
+    # Convert to the movement commands format used by the code generator
+    movement_commands = []
+    
+    for cmd in command_list:
+        cmd_type = cmd[0]  # F, L, or R
+        duration = int(cmd[1:]) if len(cmd) > 1 else 0
+        
+        if cmd_type == 'F':
+            movement_commands.append({
+                'type': 'F',
+                'duration': duration,
+                'direction': 'FORWARD'
+            })
+        elif cmd_type == 'L':
+            movement_commands.append({
+                'type': 'L',
+                'angle': duration,
+                'direction': 'LEFT'
+            })
+        elif cmd_type == 'R':
+            movement_commands.append({
+                'type': 'R',
+                'angle': duration,
+                'direction': 'RIGHT'
+            })
+    
+    return movement_commands
+
+def generate_arduino_code_from_command_string(command_string):
+    """Generate Arduino code from a formatted command string"""
+    
+    # Parse the command string
+    movement_commands = parse_command_string(command_string)
+    
+    if not movement_commands:
+        return None, None
+    
+    # Generate Arduino code
+    arduino_generator = ArduinoCodeGenerator()
+    arduino_code = arduino_generator.generate_complete_sketch(movement_commands)
+    
+    return arduino_code, movement_commands
+
 def main():
     st.title("Maze Solver & Arduino Code Generator")
-    st.markdown("Upload a maze image to generate Arduino code for your robot. The app can process both regular maze images and mazes with yellow solution paths.")
+    st.markdown("Upload a maze image or enter robot commands to generate Arduino code for your robot.")
     
-    # File uploader
-    uploaded_file = st.file_uploader("Choose a maze image (JPG or PNG)", type=["jpg", "jpeg", "png"])
+    # Add tabs for different input methods
+    tab1, tab2 = st.tabs(["Upload Maze Image", "Enter Command String"])
     
-    if uploaded_file is not None:
-        # Load image
-        image = Image.open(uploaded_file)
-        img_array = np.array(image)
+    # Tab 1: Image processing
+    with tab1:
+        # File uploader
+        uploaded_file = st.file_uploader("Choose a maze image (JPG or PNG)", type=["jpg", "jpeg", "png"])
         
-        # Display original image
-        st.subheader("Original Maze Image")
-        st.image(img_array, caption="Original Maze", use_container_width=True)
-        
-        # Check if image has a yellow path
-        yellow_path, path_points, ordered_points = extract_yellow_path(img_array)
-        has_yellow_path = path_points is not None and len(path_points) > 0
-        
-        # Create tabs based on image content
-        if has_yellow_path:
-            option = st.radio(
-                "Select processing method:",
-                ["Use yellow path from image", "Solve maze from scratch"]
-            )
+        if uploaded_file is not None:
+            # Load image
+            image = Image.open(uploaded_file)
+            img_array = np.array(image)
             
-            if option == "Use yellow path from image":
-                # YELLOW PATH PROCESSING
-                with st.spinner("Extracting yellow path and generating code..."):
-                    # Show extracted path
-                    col1, col2 = st.columns(2)
-                    
-                    with col1:
-                        st.image(yellow_path, caption="Extracted Yellow Path", use_container_width=True)
-                    
-                    # Create visualization with ordered points
-                    path_overlay = img_array.copy()
-                    for x, y in ordered_points:
-                        cv2.circle(path_overlay, (int(x), int(y)), 3, (0, 255, 0), -1)
-                    
-                    with col2:
-                        st.image(path_overlay, caption="Path Points", use_container_width=True)
-                    
-                    # Generate Arduino code directly from extracted path
-                    arduino_code, movement_commands = generate_arduino_code_from_points(ordered_points)
-                    
-                    # Display Arduino code (main focus)
-                    st.subheader("🤖 Arduino Code for Your Robot")
-                    st.code(arduino_code, language="cpp")
-                    
-                    # Button to download
-                    st.download_button(
-                        label="Download Arduino Code (.ino)",
-                        data=arduino_code,
-                        file_name="maze_solver.ino",
-                        mime="text/plain"
-                    )
-                    
-                    # Display path statistics
-                    total_distance = sum([cmd.get('duration', 0) for cmd in movement_commands if cmd.get('type') == 'F'])
-                    total_turns = sum([1 for cmd in movement_commands if cmd.get('type') in ['L', 'R']])
-                    
-                    st.success(f"✅ Successfully generated Arduino code with {len(ordered_points)} path points, {total_distance}mm travel distance, and {total_turns} turns")
+            # Display original image
+            st.subheader("Original Maze Image")
+            st.image(img_array, caption="Original Maze", use_container_width=True)
+            
+            # Check if image has a yellow path
+            yellow_path, path_points, ordered_points = extract_yellow_path(img_array)
+            has_yellow_path = path_points is not None and len(path_points) > 0
+            
+            # Create tabs based on image content
+            if has_yellow_path:
+                option = st.radio(
+                    "Select processing method:",
+                    ["Use yellow path from image", "Solve maze from scratch"]
+                )
                 
+                if option == "Use yellow path from image":
+                    # YELLOW PATH PROCESSING
+                    with st.spinner("Extracting yellow path and generating code..."):
+                        # Show extracted path
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            st.image(yellow_path, caption="Extracted Yellow Path", use_container_width=True)
+                        
+                        # Create visualization with ordered points
+                        path_overlay = img_array.copy()
+                        for x, y in ordered_points:
+                            cv2.circle(path_overlay, (int(x), int(y)), 3, (0, 255, 0), -1)
+                        
+                        with col2:
+                            st.image(path_overlay, caption="Path Points", use_container_width=True)
+                        
+                        # Generate Arduino code directly from extracted path
+                        arduino_code, movement_commands = generate_arduino_code_from_points(ordered_points)
+                        
+                        # Display Arduino code (main focus)
+                        st.subheader("🤖 Arduino Code for Your Robot")
+                        st.code(arduino_code, language="cpp")
+                        
+                        # Button to download
+                        st.download_button(
+                            label="Download Arduino Code (.ino)",
+                            data=arduino_code,
+                            file_name="maze_solver.ino",
+                            mime="text/plain"
+                        )
+                        
+                        # Display path statistics
+                        total_distance = sum([cmd.get('duration', 0) for cmd in movement_commands if cmd.get('type') == 'F'])
+                        total_turns = sum([1 for cmd in movement_commands if cmd.get('type') in ['L', 'R']])
+                        
+                        st.success(f"✅ Successfully generated Arduino code with {len(ordered_points)} path points, {total_distance}mm travel distance, and {total_turns} turns")
+                
+                else:
+                    # STANDARD MAZE SOLVING
+                    with st.spinner("Processing maze and finding optimal path..."):
+                        # Process image to detect maze structure
+                        maze_processor = MazeProcessor()
+                        processed_img, binary_maze, start_point, end_point = maze_processor.process_image(img_array)
+                        
+                        if start_point is None or end_point is None:
+                            st.warning("Could not detect start and end points clearly. Using default positions.")
+                            height, width = binary_maze.shape
+                            start_point = (width - 30, 30)
+                            end_point = (30, height - 30)
+                        
+                        # Solve the maze using A*
+                        path_finder = PathFinder()
+                        path, grid_path = path_finder.find_path(binary_maze, start_point, end_point)
+                        
+                        if path is None or len(path) == 0:
+                            st.error("Could not find a valid path through the maze. Try again with a clearer image.")
+                            return
+                        
+                        # Draw path on image
+                        path_img = maze_processor.draw_path(img_array.copy(), path)
+                        st.image(path_img, caption="Computed Path Solution", use_container_width=True)
+                        
+                        # Generate Arduino code
+                        arduino_generator = ArduinoCodeGenerator()
+                        movement_commands = arduino_generator.generate_movement_commands(path, grid_path)
+                        arduino_code = arduino_generator.generate_complete_sketch(movement_commands)
+                        
+                        # Display Arduino code (main focus)
+                        st.subheader("🤖 Arduino Code for Your Robot")
+                        st.code(arduino_code, language="cpp")
+                        
+                        # Button to download
+                        st.download_button(
+                            label="Download Arduino Code (.ino)",
+                            data=arduino_code,
+                            file_name="maze_solver.ino",
+                            mime="text/plain"
+                        )
+                        
+                        # Display path statistics
+                        total_distance = sum([cmd.get('duration', 0) for cmd in movement_commands if cmd.get('type') == 'F'])
+                        total_turns = sum([1 for cmd in movement_commands if cmd.get('type') in ['L', 'R']])
+                        
+                        st.success(f"✅ Successfully generated Arduino code with {len(path)} path points, {total_distance}mm travel distance, and {total_turns} turns")
+            
             else:
-                # STANDARD MAZE SOLVING
+                # STANDARD MAZE SOLVING (No yellow path detected)
                 with st.spinner("Processing maze and finding optimal path..."):
                     # Process image to detect maze structure
                     maze_processor = MazeProcessor()
@@ -268,54 +378,64 @@ def main():
                     total_turns = sum([1 for cmd in movement_commands if cmd.get('type') in ['L', 'R']])
                     
                     st.success(f"✅ Successfully generated Arduino code with {len(path)} path points, {total_distance}mm travel distance, and {total_turns} turns")
+    
+    # Tab 2: Direct command string input
+    with tab2:
+        st.subheader("Enter Command String")
+        st.markdown("Enter a command string in the format: `$VF285,L90,F392,L90,F285,R90,F245,R90,F570,R90,F588...#`")
+        st.markdown("- F followed by distance (mm)")
+        st.markdown("- L or R followed by angle (degrees)")
         
-        else:
-            # STANDARD MAZE SOLVING (No yellow path detected)
-            with st.spinner("Processing maze and finding optimal path..."):
-                # Process image to detect maze structure
-                maze_processor = MazeProcessor()
-                processed_img, binary_maze, start_point, end_point = maze_processor.process_image(img_array)
-                
-                if start_point is None or end_point is None:
-                    st.warning("Could not detect start and end points clearly. Using default positions.")
-                    height, width = binary_maze.shape
-                    start_point = (width - 30, 30)
-                    end_point = (30, height - 30)
-                
-                # Solve the maze using A*
-                path_finder = PathFinder()
-                path, grid_path = path_finder.find_path(binary_maze, start_point, end_point)
-                
-                if path is None or len(path) == 0:
-                    st.error("Could not find a valid path through the maze. Try again with a clearer image.")
-                    return
-                
-                # Draw path on image
-                path_img = maze_processor.draw_path(img_array.copy(), path)
-                st.image(path_img, caption="Computed Path Solution", use_container_width=True)
-                
-                # Generate Arduino code
-                arduino_generator = ArduinoCodeGenerator()
-                movement_commands = arduino_generator.generate_movement_commands(path, grid_path)
-                arduino_code = arduino_generator.generate_complete_sketch(movement_commands)
-                
-                # Display Arduino code (main focus)
-                st.subheader("🤖 Arduino Code for Your Robot")
-                st.code(arduino_code, language="cpp")
-                
-                # Button to download
-                st.download_button(
-                    label="Download Arduino Code (.ino)",
-                    data=arduino_code,
-                    file_name="maze_solver.ino",
-                    mime="text/plain"
-                )
-                
-                # Display path statistics
-                total_distance = sum([cmd.get('duration', 0) for cmd in movement_commands if cmd.get('type') == 'F'])
-                total_turns = sum([1 for cmd in movement_commands if cmd.get('type') in ['L', 'R']])
-                
-                st.success(f"✅ Successfully generated Arduino code with {len(path)} path points, {total_distance}mm travel distance, and {total_turns} turns")
+        # Command string input
+        command_string = st.text_input(
+            "Command String", 
+            value="$VF285,L90,F392,L90,F285,R90,F245,R90,F570,R90,F588,L90,F570,L90,F441,R90,F171,L90,F490,L90,F741,R90,F490,R90,F570,R90,F588,L90,F570,L90,F588#",
+            help="Format: $V[commands]# where commands are F, L, R followed by numbers, separated by commas"
+        )
+        
+        if st.button("Generate Arduino Code from String"):
+            if not command_string or not command_string.startswith("$V") or not command_string.endswith("#"):
+                st.error("Invalid command string format. Please use the format: $VF285,L90,F392...#")
+            else:
+                with st.spinner("Generating Arduino code from command string..."):
+                    arduino_code, movement_commands = generate_arduino_code_from_command_string(command_string)
+                    
+                    if arduino_code and movement_commands:
+                        # Display the generated code
+                        st.subheader("🤖 Arduino Code for Your Robot")
+                        st.code(arduino_code, language="cpp")
+                        
+                        # Button to download
+                        st.download_button(
+                            label="Download Arduino Code (.ino)",
+                            data=arduino_code,
+                            file_name="command_string_arduino.ino",
+                            mime="text/plain"
+                        )
+                        
+                        # Display path statistics
+                        total_distance = sum([cmd.get('duration', 0) for cmd in movement_commands if cmd.get('type') == 'F'])
+                        total_turns = sum([1 for cmd in movement_commands if cmd.get('type') in ['L', 'R']])
+                        total_commands = len(movement_commands)
+                        
+                        st.success(f"✅ Successfully generated Arduino code with {total_commands} commands, {total_distance}mm travel distance, and {total_turns} turns")
+                        
+                        # Visualize the path
+                        st.subheader("Command Visualization")
+                        
+                        # Create a text-based representation of the commands
+                        command_summary = ""
+                        for cmd in movement_commands:
+                            if cmd['type'] == 'F':
+                                command_summary += f"→ Forward {cmd['duration']}mm\n"
+                            elif cmd['type'] == 'L':
+                                command_summary += f"↺ Left turn {cmd['angle']}°\n"
+                            elif cmd['type'] == 'R':
+                                command_summary += f"↻ Right turn {cmd['angle']}°\n"
+                        
+                        st.text_area("Command Sequence", command_summary, height=200)
+                    else:
+                        st.error("Failed to parse command string. Please check the format and try again.")
 
 if __name__ == "__main__":
     main()
